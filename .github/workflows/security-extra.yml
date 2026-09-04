@@ -46,7 +46,8 @@ jobs:
         --recursive
         ./
       upload-sarif: true
-      fail-on-vuln: true
+      # 镜像仓库仅用于同步上游：扫描结果上报 Security 页，但不因漏洞阻断 CI
+      fail-on-vuln: false
 
   pnpm-audit:
     name: pnpm audit
