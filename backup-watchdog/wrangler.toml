@@ -2,7 +2,26 @@ name = "backup-watchdog"
 main = "src/index.ts"
 compatibility_date = "2026-10-01"
 
-# 敏感值不放这里，用 wrangler secret put 写入：
-#   FEISHU_WEBHOOK  飞书群自定义机器人的 webhook 地址
-#   FEISHU_SECRET   机器人开启“签名校验”后的密钥（未开启可不设）
-#   PROBE_TOKEN     探针访问口令
+# 定时巡检：每 30 分钟一次
+[triggers]
+crons = ["*/30 * * * *"]
+
+[vars]
+# NodeWarden 站点地址（不要带结尾斜杠）
+NW_BASE_URL = "https://vault.example.com"
+# Web Vault -> 设置 -> 安全 -> 查看 API 密钥 里显示的 client_id，形如 user.<uuid>
+NW_CLIENT_ID = "user.00000000-0000-0000-0000-000000000000"
+# 同一问题重复提醒的最小间隔（小时）
+COOLDOWN_HOURS = "6"
+
+# 需要先执行：npx wrangler kv namespace create STATE
+# 然后把命令输出的 id 填到这里
+[[kv_namespaces]]
+binding = "STATE"
+id = "<把 kv namespace create 输出的 id 填到这里>"
+
+# 以下敏感值用 wrangler secret put 写入：
+#   NW_CLIENT_SECRET  API 密钥（client_secret）
+#   FEISHU_WEBHOOK    飞书群自定义机器人 webhook
+#   FEISHU_SECRET     飞书机器人签名密钥（开启签名校验时需要）
+#   WATCHDOG_TOKEN    手动触发/探针口令
