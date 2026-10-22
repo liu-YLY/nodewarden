@@ -8,20 +8,19 @@ crons = ["*/30 * * * *"]
 
 [vars]
 # NodeWarden 站点地址（不要带结尾斜杠）
-NW_BASE_URL = "https://vault.example.com"
+NW_BASE_URL = "https://nodewarden.liuyong.eu.org"
 # Web Vault -> 设置 -> 安全 -> 查看 API 密钥 里显示的 client_id，形如 user.<uuid>
-NW_CLIENT_ID = "user.00000000-0000-0000-0000-000000000000"
+NW_CLIENT_ID = "user.18fd9855-55c9-4d06-b405-bc9a01c2c388"
 # 同一问题重复提醒的最小间隔（小时）
 COOLDOWN_HOURS = "6"
 # 飞书应用机器人
 FEISHU_APP_ID = "cli_aa532d25a5b9dc00"
 FEISHU_CHAT_ID = "oc_1e46aedb7b902e32afa45e199f3f2185"
 
-# 需要先执行：npx wrangler kv namespace create STATE
-# 然后把命令输出的 id 填到这里
+# 线上已绑定的 KV namespace
 [[kv_namespaces]]
 binding = "STATE"
-id = "<把 kv namespace create 输出的 id 填到这里>"
+id = "31522eeed7934579beab5d856add1d39"
 
 # 以下敏感值用 wrangler secret put 写入：
 #   NW_CLIENT_SECRET   NodeWarden API 密钥（client_secret）
