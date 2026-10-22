@@ -300,20 +300,20 @@ function evaluateDestination(
   staleGraceHours: number
 ): Health {
   const schedule = destination.schedule;
-  if (!schedule?.enabled) {
-    return { kind: "skipped" };
-  }
+  const scheduleEnabled = Boolean(schedule?.enabled);
 
-  const intervalHours = Number(schedule.intervalHours) > 0 ? Number(schedule.intervalHours) : 24;
+  const intervalHours = Number(schedule?.intervalHours) > 0 ? Number(schedule.intervalHours) : 24;
   const graceHours = staleGraceHours > 0 ? staleGraceHours : Math.max(2, intervalHours * 0.25);
   const runtime = destination.runtime || ({} as BackupRuntimeState);
 
   const lastSuccessMs = runtime.lastSuccessAt ? Date.parse(runtime.lastSuccessAt) : NaN;
   const lastErrorMs = runtime.lastErrorAt ? Date.parse(runtime.lastErrorAt) : NaN;
   const hasSuccess = Number.isFinite(lastSuccessMs);
-  const caption = `存储类型 ${destination.type} · 计划间隔 每 ${intervalHours} 小时`;
+  const caption = scheduleEnabled
+    ? `存储类型 ${destination.type} · 计划间隔 每 ${intervalHours} 小时`
+    : `存储类型 ${destination.type} · 未开启定时备份`;
 
-  // 最近一次记录是错误，且错误晚于（或没有）成功记录
+  // 无论定时是否开启，手动执行失败同样会写 lastErrorAt，都要告警
   if (Number.isFinite(lastErrorMs) && (!hasSuccess || lastErrorMs > lastSuccessMs)) {
     return {
       kind: "failed",
@@ -328,6 +328,11 @@ function evaluateDestination(
         ],
       },
     };
+  }
+
+  // 未开启定时的目的地只关心失败，不判断“过期”“从未成功”
+  if (!scheduleEnabled) {
+    return { kind: "skipped" };
   }
 
   if (!hasSuccess) {
