@@ -2,15 +2,7 @@ name = "backup-watchdog"
 main = "src/index.ts"
 compatibility_date = "2026-10-01"
 
-# 发件地址：必须是本账号已接入 Cloudflare Email 的域名下的地址
-# 例如 noreply@yourdomain.com
-[vars]
-MAIL_FROM = "noreply@yourdomain.com"
-# 默认收件地址：必须是 Email Routing -> Destination addresses 里已验证的地址
-MAIL_TO = "you@example.com"
-
-# 邮件发送绑定
-# 只保留 name，不额外加限制；默认范围就是本账号内的“已验证收件地址”，
-# 也就是免费范围，不会发往任意收件人产生费用。
-[[send_email]]
-name = "EMAIL"
+# 敏感值不放这里，用 wrangler secret put 写入：
+#   FEISHU_WEBHOOK  飞书群自定义机器人的 webhook 地址
+#   FEISHU_SECRET   机器人开启“签名校验”后的密钥（未开启可不设）
+#   PROBE_TOKEN     探针访问口令
