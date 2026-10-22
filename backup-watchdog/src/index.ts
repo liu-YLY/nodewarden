@@ -65,9 +65,18 @@ interface BackupSettings {
 
 type HealthKind = "ok" | "skipped" | "failed" | "stale" | "never";
 
+type AlertLevel = "error" | "warning" | "ok";
+
+/** 一条告警/恢复条目，最终渲染成卡片里的一段 */
+interface AlertItem {
+  level: AlertLevel;
+  title: string;
+  lines: string[];
+}
+
 interface Health {
   kind: HealthKind;
-  line: string;
+  alert?: AlertItem;
 }
 
 interface NotifyState {
@@ -117,7 +126,12 @@ async function getFeishuToken(env: Env, forceRefresh: boolean): Promise<string> 
   return data.tenant_access_token;
 }
 
-async function sendFeishuMessage(token: string, chatId: string, text: string): Promise<{ code?: number; msg?: string }> {
+async function sendFeishuMessage(
+  token: string,
+  chatId: string,
+  msgType: string,
+  content: string
+): Promise<{ code?: number; msg?: string }> {
   const response = await fetch(FEISHU_MESSAGE_URL, {
     method: "POST",
     headers: {
@@ -125,28 +139,81 @@ async function sendFeishuMessage(token: string, chatId: string, text: string): P
       "content-type": "application/json; charset=utf-8",
     },
     // 飞书要求 content 是字符串化的 JSON，不是嵌套对象
-    body: JSON.stringify({
-      receive_id: chatId,
-      msg_type: "text",
-      content: JSON.stringify({ text }),
-    }),
+    body: JSON.stringify({ receive_id: chatId, msg_type: msgType, content }),
   });
   return (await response.json()) as { code?: number; msg?: string };
 }
 
-async function sendFeishu(env: Env, text: string): Promise<void> {
+/** 把若干条告警渲染成一张飞书卡片 */
+function buildCard(env: Env, items: AlertItem[]): Record<string, unknown> {
+  const hasError = items.some((item) => item.level === "error");
+  const hasWarning = items.some((item) => item.level === "warning");
+  const allOk = items.every((item) => item.level === "ok");
+
+  const template = hasError ? "red" : hasWarning ? "orange" : allOk ? "green" : "blue";
+  const title = hasError
+    ? "NodeWarden 备份告警"
+    : hasWarning
+      ? "NodeWarden 备份提醒"
+      : allOk
+        ? "NodeWarden 备份恢复"
+        : "NodeWarden 备份状态";
+
+  const elements: Array<Record<string, unknown>> = [];
+  items.forEach((item, index) => {
+    if (index > 0) elements.push({ tag: "hr" });
+    elements.push({
+      tag: "div",
+      text: {
+        tag: "lark_md",
+        content: [`**${item.title}**`, ...item.lines].join("\n"),
+      },
+    });
+  });
+
+  elements.push({ tag: "hr" });
+  elements.push({
+    tag: "note",
+    elements: [
+      {
+        tag: "plain_text",
+        content: `巡检时间 ${formatTime(new Date().toISOString())}（Asia/Shanghai）`,
+      },
+    ],
+  });
+  elements.push({
+    tag: "action",
+    actions: [
+      {
+        tag: "button",
+        text: { tag: "plain_text", content: "打开 NodeWarden" },
+        type: "primary",
+        url: baseUrl(env),
+      },
+    ],
+  });
+
+  return {
+    config: { wide_screen_mode: true },
+    header: { template, title: { tag: "plain_text", content: title } },
+    elements,
+  };
+}
+
+async function sendFeishu(env: Env, items: AlertItem[]): Promise<void> {
   if (!env.FEISHU_APP_ID || !env.FEISHU_APP_SECRET || !env.FEISHU_CHAT_ID) {
     throw new Error("FEISHU_APP_ID / FEISHU_APP_SECRET / FEISHU_CHAT_ID 未配置");
   }
 
+  const card = JSON.stringify(buildCard(env, items));
   let token = await getFeishuToken(env, false);
-  let result = await sendFeishuMessage(token, env.FEISHU_CHAT_ID, text);
+  let result = await sendFeishuMessage(token, env.FEISHU_CHAT_ID, "interactive", card);
 
   // 令牌失效时刷新重试一次
   if (result.code !== 0 && [99991661, 99991663, 99991668].includes(Number(result.code))) {
     await env.STATE.delete(FEISHU_TOKEN_KEY);
     token = await getFeishuToken(env, true);
-    result = await sendFeishuMessage(token, env.FEISHU_CHAT_ID, text);
+    result = await sendFeishuMessage(token, env.FEISHU_CHAT_ID, "interactive", card);
   }
 
   if (result.code !== 0) {
@@ -234,7 +301,7 @@ function evaluateDestination(
 ): Health {
   const schedule = destination.schedule;
   if (!schedule?.enabled) {
-    return { kind: "skipped", line: "" };
+    return { kind: "skipped" };
   }
 
   const intervalHours = Number(schedule.intervalHours) > 0 ? Number(schedule.intervalHours) : 24;
@@ -244,24 +311,33 @@ function evaluateDestination(
   const lastSuccessMs = runtime.lastSuccessAt ? Date.parse(runtime.lastSuccessAt) : NaN;
   const lastErrorMs = runtime.lastErrorAt ? Date.parse(runtime.lastErrorAt) : NaN;
   const hasSuccess = Number.isFinite(lastSuccessMs);
+  const caption = `存储类型 ${destination.type} · 计划间隔 每 ${intervalHours} 小时`;
 
   // 最近一次记录是错误，且错误晚于（或没有）成功记录
   if (Number.isFinite(lastErrorMs) && (!hasSuccess || lastErrorMs > lastSuccessMs)) {
-    const detail = runtime.lastErrorMessage ? `\n    原因：${runtime.lastErrorMessage}` : "";
     return {
       kind: "failed",
-      line: `• ${destination.name}（${destination.type}）— 备份失败\n    最近尝试：${formatTime(
-        runtime.lastAttemptAt
-      )}\n    上次成功：${formatTime(runtime.lastSuccessAt)}${hasSuccess ? hoursAgo(runtime.lastSuccessAt, now) : ""}${detail}`,
+      alert: {
+        level: "error",
+        title: `${destination.name} · 备份失败`,
+        lines: [
+          caption,
+          `上次成功：${formatTime(runtime.lastSuccessAt)}`,
+          `最近尝试：${formatTime(runtime.lastAttemptAt)}`,
+          ...(runtime.lastErrorMessage ? [`失败原因：${runtime.lastErrorMessage}`] : []),
+        ],
+      },
     };
   }
 
   if (!hasSuccess) {
     return {
       kind: "never",
-      line: `• ${destination.name}（${destination.type}）— 从未成功备份\n    最近尝试：${formatTime(
-        runtime.lastAttemptAt
-      )}`,
+      alert: {
+        level: "warning",
+        title: `${destination.name} · 从未成功备份`,
+        lines: [caption, `最近尝试：${formatTime(runtime.lastAttemptAt)}`],
+      },
     };
   }
 
@@ -269,13 +345,19 @@ function evaluateDestination(
   if (now - lastSuccessMs > overdueMs) {
     return {
       kind: "stale",
-      line: `• ${destination.name}（${destination.type}）— 备份已过期\n    上次成功：${formatTime(
-        runtime.lastSuccessAt
-      )}${hoursAgo(runtime.lastSuccessAt, now)}\n    计划间隔：每 ${intervalHours} 小时`,
+      alert: {
+        level: "warning",
+        title: `${destination.name} · 备份已过期`,
+        lines: [
+          caption,
+          `上次成功：${formatTime(runtime.lastSuccessAt)}${hoursAgo(runtime.lastSuccessAt, now)}`,
+          `已超过 ${intervalHours + graceHours} 小时的预期周期`,
+        ],
+      },
     };
   }
 
-  return { kind: "ok", line: "" };
+  return { kind: "ok" };
 }
 
 async function readState(env: Env, key: string): Promise<NotifyState | null> {
@@ -316,10 +398,13 @@ async function runCheck(env: Env): Promise<RunResult> {
     const previous = await readState(env, UNREACHABLE_KEY);
     const shouldNotify = !previous || now - previous.notifiedAt > cooldownMs(env);
     if (shouldNotify) {
-      await sendFeishu(
-        env,
-        `【NodeWarden 监控异常】${formatTime(new Date(now).toISOString())}\n无法读取备份状态：${message}`
-      );
+      await sendFeishu(env, [
+        {
+          level: "error",
+          title: "无法读取 NodeWarden 备份状态",
+          lines: [`地址：${baseUrl(env)}`, `错误：${message}`],
+        },
+      ]);
       await writeState(env, UNREACHABLE_KEY, { kind: "unreachable", notifiedAt: now });
       result.notified.push("unreachable");
     }
@@ -328,9 +413,9 @@ async function runCheck(env: Env): Promise<RunResult> {
 
   // 读取成功，若之前处于不可达状态则提示恢复
   const unreachable = await readState(env, UNREACHABLE_KEY);
-  const lines: string[] = [];
+  const alerts: AlertItem[] = [];
   if (unreachable?.kind === "unreachable") {
-    lines.push("✅ NodeWarden 备份状态已恢复可读取");
+    alerts.push({ level: "ok", title: "NodeWarden 状态已恢复可读取", lines: [`地址：${baseUrl(env)}`] });
     await writeState(env, UNREACHABLE_KEY, { kind: "ok", notifiedAt: now });
     result.notified.push("unreachable-recovered");
   }
@@ -347,7 +432,14 @@ async function runCheck(env: Env): Promise<RunResult> {
 
     if (health.kind === "ok" || health.kind === "skipped") {
       if (previous && previous.kind !== "ok") {
-        lines.push(`✅ ${destination.name}（${destination.type}）— 已恢复正常`);
+        alerts.push({
+          level: "ok",
+          title: `${destination.name} · 已恢复正常`,
+          lines: [
+            `存储类型 ${destination.type}`,
+            `上次成功：${formatTime(destination.runtime?.lastSuccessAt)}`,
+          ],
+        });
         result.notified.push(`${destination.id}:recovered`);
       }
       await writeState(env, key, { kind: "ok", notifiedAt: now });
@@ -362,14 +454,13 @@ async function runCheck(env: Env): Promise<RunResult> {
       continue;
     }
 
-    lines.push(health.line);
+    if (health.alert) alerts.push(health.alert);
     await writeState(env, key, { kind: health.kind, notifiedAt: now });
     result.notified.push(`${destination.id}:${health.kind}`);
   }
 
-  if (lines.length > 0) {
-    const header = `【NodeWarden 备份告警】${formatTime(new Date(now).toISOString())}\n\n`;
-    await sendFeishu(env, header + lines.join("\n\n"));
+  if (alerts.length > 0) {
+    await sendFeishu(env, alerts);
   }
 
   return result;
@@ -401,12 +492,13 @@ export default {
 
     try {
       if (url.pathname === "/probe") {
-        await sendFeishu(
-          env,
-          `[NodeWarden] 通知通道探针\n如果这条消息出现在群里，说明飞书 webhook 可用。\n时间：${formatTime(
-            new Date().toISOString()
-          )}`
-        );
+        await sendFeishu(env, [
+          {
+            level: "ok",
+            title: "通知通道探针",
+            lines: ["如果你看到这张卡片，说明 NodeWarden 的飞书通知链路已经接通。", "这条消息由手动触发，不代表备份状态。"],
+          },
+        ]);
         return json({ ok: true, message: "测试消息已发送" });
       }
 
