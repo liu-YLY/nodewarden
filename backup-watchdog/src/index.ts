@@ -12,9 +12,12 @@
  */
 
 const TOKEN_CACHE_KEY = "nw:access-token";
+const FEISHU_TOKEN_KEY = "feishu:tenant-token";
 const UNREACHABLE_KEY = "global:unreachable";
 const DEFAULT_COOLDOWN_HOURS = 6;
 const CST_OFFSET_MS = 8 * 60 * 60 * 1000;
+const FEISHU_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal";
+const FEISHU_MESSAGE_URL = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id";
 
 interface KVNamespaceLike {
   get(key: string): Promise<string | null>;
@@ -27,8 +30,9 @@ interface Env {
   NW_BASE_URL: string;
   NW_CLIENT_ID: string;
   NW_CLIENT_SECRET: string;
-  FEISHU_WEBHOOK: string;
-  FEISHU_SECRET?: string;
+  FEISHU_APP_ID: string;
+  FEISHU_APP_SECRET: string;
+  FEISHU_CHAT_ID: string;
   WATCHDOG_TOKEN: string;
   COOLDOWN_HOURS?: string;
   STALE_GRACE_HOURS?: string;
@@ -85,56 +89,68 @@ function json(data: unknown, status: number = 200): Response {
   });
 }
 
-function base64(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
+/** 应用机器人：tenant_access_token 有效期 2 小时，缓存到 KV，提前 10 分钟过期 */
+async function getFeishuToken(env: Env, forceRefresh: boolean): Promise<string> {
+  if (!forceRefresh) {
+    const cached = await env.STATE.get(FEISHU_TOKEN_KEY);
+    if (cached) return cached;
+  }
+
+  const response = await fetch(FEISHU_TOKEN_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json; charset=utf-8" },
+    body: JSON.stringify({ app_id: env.FEISHU_APP_ID, app_secret: env.FEISHU_APP_SECRET }),
+  });
+  const data = (await response.json()) as {
+    code?: number;
+    msg?: string;
+    expire?: number;
+    tenant_access_token?: string;
+  };
+
+  if (!response.ok || data.code !== 0 || !data.tenant_access_token) {
+    throw new Error(`获取飞书令牌失败：HTTP ${response.status} ${JSON.stringify(data)}`);
+  }
+
+  const ttl = Math.max(120, Number(data.expire || 7200) - 600);
+  await env.STATE.put(FEISHU_TOKEN_KEY, data.tenant_access_token, { expirationTtl: ttl });
+  return data.tenant_access_token;
 }
 
-/** 飞书签名：以 `${timestamp}\n${secret}` 作为 HMAC 密钥，对空串做 HMAC-SHA256 后 Base64 */
-async function feishuSign(secret: string): Promise<{ timestamp: string; sign: string }> {
-  const timestamp = String(Math.floor(Date.now() / 1000));
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(`${timestamp}\n${secret}`),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const signature = await crypto.subtle.sign("HMAC", key, new Uint8Array(0));
-  return { timestamp, sign: base64(new Uint8Array(signature)) };
+async function sendFeishuMessage(token: string, chatId: string, text: string): Promise<{ code?: number; msg?: string }> {
+  const response = await fetch(FEISHU_MESSAGE_URL, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json; charset=utf-8",
+    },
+    // 飞书要求 content 是字符串化的 JSON，不是嵌套对象
+    body: JSON.stringify({
+      receive_id: chatId,
+      msg_type: "text",
+      content: JSON.stringify({ text }),
+    }),
+  });
+  return (await response.json()) as { code?: number; msg?: string };
 }
 
 async function sendFeishu(env: Env, text: string): Promise<void> {
-  const webhook = (env.FEISHU_WEBHOOK || "").trim();
-  if (!webhook) throw new Error("FEISHU_WEBHOOK 未配置");
-
-  const payload: Record<string, unknown> = {
-    msg_type: "text",
-    content: { text },
-  };
-  if (env.FEISHU_SECRET) {
-    const { timestamp, sign } = await feishuSign(env.FEISHU_SECRET);
-    payload.timestamp = timestamp;
-    payload.sign = sign;
+  if (!env.FEISHU_APP_ID || !env.FEISHU_APP_SECRET || !env.FEISHU_CHAT_ID) {
+    throw new Error("FEISHU_APP_ID / FEISHU_APP_SECRET / FEISHU_CHAT_ID 未配置");
   }
 
-  const response = await fetch(webhook, {
-    method: "POST",
-    headers: { "content-type": "application/json; charset=utf-8" },
-    body: JSON.stringify(payload),
-  });
-  const body = await response.text();
-  // 飞书业务失败通常也返回 HTTP 200，需要看 body 里的 code
-  let code: number | null = null;
-  try {
-    const parsed = JSON.parse(body) as { code?: number; StatusCode?: number };
-    code = typeof parsed.code === "number" ? parsed.code : parsed.StatusCode ?? null;
-  } catch {
-    code = null;
+  let token = await getFeishuToken(env, false);
+  let result = await sendFeishuMessage(token, env.FEISHU_CHAT_ID, text);
+
+  // 令牌失效时刷新重试一次
+  if (result.code !== 0 && [99991661, 99991663, 99991668].includes(Number(result.code))) {
+    await env.STATE.delete(FEISHU_TOKEN_KEY);
+    token = await getFeishuToken(env, true);
+    result = await sendFeishuMessage(token, env.FEISHU_CHAT_ID, text);
   }
-  if (!response.ok || code !== 0) {
-    throw new Error(`飞书返回异常：HTTP ${response.status} ${body}`);
+
+  if (result.code !== 0) {
+    throw new Error(`飞书发消息失败：code=${result.code} msg=${result.msg || ""}`);
   }
 }
 

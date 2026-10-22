@@ -13,6 +13,9 @@ NW_BASE_URL = "https://vault.example.com"
 NW_CLIENT_ID = "user.00000000-0000-0000-0000-000000000000"
 # 同一问题重复提醒的最小间隔（小时）
 COOLDOWN_HOURS = "6"
+# 飞书应用机器人
+FEISHU_APP_ID = "cli_aa532d25a5b9dc00"
+FEISHU_CHAT_ID = "oc_1e46aedb7b902e32afa45e199f3f2185"
 
 # 需要先执行：npx wrangler kv namespace create STATE
 # 然后把命令输出的 id 填到这里
@@ -21,7 +24,6 @@ binding = "STATE"
 id = "<把 kv namespace create 输出的 id 填到这里>"
 
 # 以下敏感值用 wrangler secret put 写入：
-#   NW_CLIENT_SECRET  API 密钥（client_secret）
-#   FEISHU_WEBHOOK    飞书群自定义机器人 webhook
-#   FEISHU_SECRET     飞书机器人签名密钥（开启签名校验时需要）
-#   WATCHDOG_TOKEN    手动触发/探针口令
+#   NW_CLIENT_SECRET   NodeWarden API 密钥（client_secret）
+#   FEISHU_APP_SECRET  飞书应用的 App Secret
+#   WATCHDOG_TOKEN     手动触发/探针口令
