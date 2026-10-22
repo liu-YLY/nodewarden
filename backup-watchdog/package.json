@@ -1,13 +1,15 @@
 {
   "name": "backup-watchdog",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "build": "esbuild src/index.ts --bundle --format=esm --target=es2022 --minify --outfile=dist/index.min.js",
+    "deploy": "npm run build && wrangler deploy"
   },
   "devDependencies": {
+    "esbuild": "^0.25.0",
     "wrangler": "^4"
   }
 }
