@@ -18,6 +18,7 @@ crons = [ "*/5 * * * *" ]
 [[d1_databases]]
 binding = "DB"
 database_name = "nodewarden-db"
+database_id = "8d6d6a29-ca8d-4a16-aab5-d8f1c800da4b"
 
 [[durable_objects.bindings]]
 name = "NOTIFICATIONS_HUB"
