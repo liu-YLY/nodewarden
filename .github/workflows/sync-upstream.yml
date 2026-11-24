@@ -41,6 +41,7 @@ jobs:
         with:
           base: main
           branch: chore/sync-upstream
+          assignees: liu-YLY
           delete-branch: true
           title: "chore: sync upstream main"
           commit-message: "chore: sync upstream main"

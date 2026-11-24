@@ -44,6 +44,7 @@ jobs:
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1
         with:
           branch: chore/sync-bitwarden-global-domains
+          assignees: liu-YLY
           delete-branch: true
           title: "chore: sync Bitwarden global domain rules"
           commit-message: "chore: sync Bitwarden global domain rules"
