@@ -1,0 +1,54 @@
+name: Sync upstream
+
+on:
+  schedule:
+    # Every Monday 03:00 UTC (11:00 Asia/Shanghai)
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/shuaiplus/nodewarden.git
+          git fetch upstream main
+
+      - name: Merge upstream into sync branch
+        run: |
+          git checkout -B chore/sync-upstream
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              merge upstream/main --no-edit
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1
+        with:
+          base: main
+          branch: chore/sync-upstream
+          delete-branch: true
+          title: "chore: sync upstream main"
+          commit-message: "chore: sync upstream main"
+          body: |
+            Automated sync from `shuaiplus/nodewarden` (`main`).
+
+            Review the diff, then merge this PR. Merging to `main` triggers the
+            Cloudflare Workers Builds deployment for `nodewarden`.
+
+            If this workflow fails at the merge step, there is a conflict that
+            needs manual resolution.
